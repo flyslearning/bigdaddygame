@@ -1,8 +1,7 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
-import { db } from "./db";
-
+import { postgres } from "./postgres";
 // BigDaddy GAME Authentication Configuration
 
 const COOKIE = "bigdaddy_session";
@@ -49,6 +48,7 @@ export function createSession(id: number): string {
 }
 
 // Get logged-in admin
+
 export async function currentAdmin(): Promise<{
   id: number;
   email: string;
@@ -64,21 +64,11 @@ export async function currentAdmin(): Promise<{
 
   const [payload, receivedSignature] = parts;
 
-  if (
-    !payload ||
-    !/^[a-f0-9]{64}$/.test(receivedSignature)
-  ) {
+  if (!payload || !/^[a-f0-9]{64}$/.test(receivedSignature)) {
     return null;
   }
 
-  let expected: Buffer;
-
-  try {
-    expected = Buffer.from(signature(payload), "hex");
-  } catch {
-    return null;
-  }
-
+  const expected = Buffer.from(signature(payload), "hex");
   const received = Buffer.from(receivedSignature, "hex");
 
   if (
@@ -89,38 +79,37 @@ export async function currentAdmin(): Promise<{
   }
 
   try {
-    const decoded = JSON.parse(
+    const p = JSON.parse(
       Buffer.from(payload, "base64url").toString("utf8")
     );
 
     if (
-      !decoded ||
-      !Number.isSafeInteger(decoded.id) ||
-      decoded.id <= 0 ||
-      typeof decoded.exp !== "number" ||
-      !Number.isFinite(decoded.exp) ||
-      Date.now() >= decoded.exp
+      !Number.isSafeInteger(p.id) ||
+      p.id <= 0 ||
+      typeof p.exp !== "number" ||
+      !Number.isFinite(p.exp) ||
+      Date.now() >= p.exp
     ) {
       return null;
     }
 
-    const admin = db()
-      .prepare(
-        "SELECT id, email, role FROM admins WHERE id = ?"
-      )
-      .get(decoded.id) as
-      | {
-          id: number;
-          email: string;
-          role: string;
-        }
-      | undefined;
+    const result = await postgres().query<{
+      id: number;
+      email: string;
+      role: string;
+    }>(
+      `SELECT id, email, role
+       FROM public.admins
+       WHERE id = $1 AND status = 'ACTIVE'`,
+      [p.id]
+    );
 
-    return admin ?? null;
+    return result.rows[0] ?? null;
   } catch {
     return null;
   }
 }
+
 
 // Secure session cookie
 export function sessionCookie(value: string) {
