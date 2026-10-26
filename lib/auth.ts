@@ -3,8 +3,14 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
 import { db } from "./db";
 
+// BigDaddy GAME Authentication Configuration
+
 const COOKIE = "bigdaddy_session";
+
 const SESSION_DURATION = 8 * 60 * 60 * 1000;
+
+// Official production URL
+const PRODUCTION_URL = "https://bigdaddygame.vercel.app";
 
 // Validate session secret
 function secret(): string {
@@ -12,21 +18,21 @@ function secret(): string {
 
   if (!value || value.length < 32) {
     throw new Error(
-      "SESSION_SECRET must contain at least 32 characters. Check your .env file."
+      "SESSION_SECRET must contain at least 32 characters. Check Vercel environment variables."
     );
   }
 
   return value;
 }
 
-// Generate secure HMAC signature
+// Generate HMAC SHA-256 signature
 function signature(data: string): string {
   return createHmac("sha256", secret())
     .update(data)
     .digest("hex");
 }
 
-// Create signed session token
+// Create secure session
 export function createSession(id: number): string {
   if (!Number.isSafeInteger(id) || id <= 0) {
     throw new Error("Invalid admin ID");
@@ -42,7 +48,7 @@ export function createSession(id: number): string {
   return `${payload}.${signature(payload)}`;
 }
 
-// Get currently authenticated admin
+// Get logged-in admin
 export async function currentAdmin(): Promise<{
   id: number;
   email: string;
@@ -58,11 +64,21 @@ export async function currentAdmin(): Promise<{
 
   const [payload, receivedSignature] = parts;
 
-  if (!payload || !/^[a-f0-9]{64}$/.test(receivedSignature)) {
+  if (
+    !payload ||
+    !/^[a-f0-9]{64}$/.test(receivedSignature)
+  ) {
     return null;
   }
 
-  const expected = Buffer.from(signature(payload), "hex");
+  let expected: Buffer;
+
+  try {
+    expected = Buffer.from(signature(payload), "hex");
+  } catch {
+    return null;
+  }
+
   const received = Buffer.from(receivedSignature, "hex");
 
   if (
@@ -115,47 +131,46 @@ export function sessionCookie(value: string) {
     secure: process.env.NODE_ENV === "production",
     sameSite: "strict" as const,
     path: "/",
-    maxAge: 8 * 60 * 60,
+    maxAge: Math.floor(SESSION_DURATION / 1000),
   };
 }
 
-// Validate request origin against allowed application origin
+// Validate request origin
 export function checkOrigin(request: Request): boolean {
   const origin = request.headers.get("origin");
 
-  if (!origin) return false;
+  if (!origin) {
+    return false;
+  }
 
   try {
-    const parsedOrigin = new URL(origin);
+    const requestOrigin = new URL(origin).origin;
+
+    // Production domain is always allowed
+    const allowedOrigins: string[] = [
+      new URL(PRODUCTION_URL).origin,
+    ];
+
+    // Optional custom domain
     const configuredUrl = process.env.APP_URL;
 
     if (configuredUrl) {
-      const allowed = new URL(configuredUrl);
-      return parsedOrigin.origin === allowed.origin;
+      allowedOrigins.push(
+        new URL(configuredUrl).origin
+      );
     }
 
-    // Local development only, without a configured APP_URL
+    // Development environments
     if (process.env.NODE_ENV !== "production") {
-      const host = request.headers.get("host");
-
-      if (!host) return false;
-
-      const hostname = host.split(":")[0];
-
-      if (
-        hostname !== "localhost" &&
-        hostname !== "127.0.0.1"
-      ) {
-        return false;
-      }
-
-      return parsedOrigin.host === host &&
-        (parsedOrigin.protocol === "http:" ||
-         parsedOrigin.protocol === "https:");
+      allowedOrigins.push(
+        "http://localhost:3000",
+        "http://127.0.0.1:3000"
+      );
     }
 
-    return false;
-  } catch {
+    return allowedOrigins.includes(requestOrigin);
+  } catch (error) {
+    console.error("Origin validation error:", error);
     return false;
   }
 }
