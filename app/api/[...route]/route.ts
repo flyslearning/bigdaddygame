@@ -8,6 +8,7 @@ import {
   createSession,
   sessionCookie,
   checkOrigin,
+  adminIdToNumber,
 } from "@/lib/auth";
 
 import { postgres, auditLog } from "@/lib/postgres";
@@ -312,10 +313,10 @@ export async function POST(
       }).parse(body);
 
       const result = await database.query<{
-        id: number;
+        id: string;
         pass_hash: string;
       }>(
-        `SELECT id,pass_hash
+        `SELECT id::text AS id,pass_hash
          FROM admins
          WHERE email=$1 AND status='ACTIVE'`,
         [v.email.trim().toLowerCase()]
@@ -335,11 +336,9 @@ export async function POST(
 
       const response = ok({ success: true });
 
-      response.cookies.set(
-        sessionCookie(createSession(account.id))
-      );
-
-      await auditLog(account.id, "LOGIN", {});
+      const adminId = adminIdToNumber(account.id);
+      response.cookies.set(sessionCookie(createSession(adminId)));
+      await auditLog(adminId, "LOGIN", {});
 
       return response;
     }
@@ -413,7 +412,7 @@ export async function POST(
         await client.query("BEGIN");
 
         const playerResult = await client.query<{
-          id: number;
+          id: string | number;
           points: number;
         }>(
           `SELECT id,points
@@ -431,7 +430,7 @@ export async function POST(
           );
         }
 
-        const after = player.points + v.delta;
+        const after = Number(player.points) + v.delta;
 
         if (after < 0) {
           throw new Error("Insufficient points");
